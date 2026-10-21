@@ -179,45 +179,118 @@ def get_sample_asesor():
 def get_sample_dosen():
     return pd.read_excel(os.path.join(BASE_DIR, "data_dosen.xlsx"))
 
+def normalize_text(val):
+    return str(val if val is not None else "").strip().lower()
+
 def calculate_kekurangan(df_asesor, df_dosen):
-    asesor_count = df_asesor.groupby(["Fakultas", "Prodi"]).size().reset_index(name="Jumlah Asesor")
-    dosen_count = df_dosen.groupby(["Fakultas", "Prodi"]).size().reset_index(name="Jumlah Dosen")
-    comparison = pd.merge(dosen_count, asesor_count, on=["Fakultas", "Prodi"], how="left")
+    """Perbandingan per Fakultas+Prodi: Ideal = 30% jumlah dosen di prodi yang sama."""
+    a = df_asesor.copy()
+    d = df_dosen.copy()
+    for col in ["Fakultas", "Prodi"]:
+        if col in a.columns:
+            a[col] = a[col].astype(str).str.strip()
+        if col in d.columns:
+            d[col] = d[col].astype(str).str.strip()
+
+    asesor_count = a.groupby(["Fakultas", "Prodi"], dropna=False).size().reset_index(name="Jumlah Asesor")
+    dosen_count = d.groupby(["Fakultas", "Prodi"], dropna=False).size().reset_index(name="Jumlah Dosen")
+
+    # Outer agar prodi yang hanya punya asesor atau hanya dosen tetap tampil
+    comparison = pd.merge(dosen_count, asesor_count, on=["Fakultas", "Prodi"], how="outer")
+    comparison["Jumlah Dosen"] = comparison["Jumlah Dosen"].fillna(0).astype(int)
     comparison["Jumlah Asesor"] = comparison["Jumlah Asesor"].fillna(0).astype(int)
     comparison["Ideal (30%)"] = (comparison["Jumlah Dosen"] * 0.3).round(0).astype(int)
     comparison["Kekurangan"] = (comparison["Ideal (30%)"] - comparison["Jumlah Asesor"]).clip(lower=0)
+    comparison["Kelebihan"] = (comparison["Jumlah Asesor"] - comparison["Ideal (30%)"]).clip(lower=0)
     comparison["Status"] = comparison.apply(
-        lambda r: "✅ Cukup" if r["Jumlah Asesor"] >= r["Ideal (30%)"] else "⚠️ Kurang", axis=1
+        lambda r: (
+            "➖ Tidak ada Dosen" if r["Jumlah Dosen"] == 0
+            else ("✅ Cukup" if r["Jumlah Asesor"] >= r["Ideal (30%)"] else "⚠️ Kurang")
+        ),
+        axis=1,
     )
-    comparison["Persentase Asesor"] = (
-        comparison["Jumlah Asesor"] / comparison["Jumlah Dosen"] * 100
-    ).round(1)
-    return comparison.sort_values("Kekurangan", ascending=False)
+    comparison["Persentase Asesor"] = comparison.apply(
+        lambda r: round(r["Jumlah Asesor"] / r["Jumlah Dosen"] * 100, 1) if r["Jumlah Dosen"] > 0 else 0.0,
+        axis=1,
+    )
+    return comparison.sort_values(["Kekurangan", "Fakultas", "Prodi"], ascending=[False, True, True])
+
+def jabatan_rank(jabatan):
+    j = normalize_text(jabatan)
+    if "guru besar" in j or "profesor" in j:
+        return 4
+    if "lektor kepala" in j:
+        return 3
+    if "lektor" in j:  # Lektor (bukan Lektor Kepala)
+        return 2
+    if "asisten" in j:
+        return 1
+    return 0
+
+def is_dosen_tetap(status):
+    s = normalize_text(status)
+    # Terima variasi: Dosen Tetap, Tetap, PNS, DTY, dll.
+    if any(x in s for x in ["tidak tetap", "non tetap", "honorer", "luar biasa", "lb"]):
+        return False
+    return any(x in s for x in ["tetap", "pns", "dty", "permanen", "aktif"])
+
+def is_serdos_sudah(status):
+    s = normalize_text(status)
+    if any(x in s for x in ["belum", "tidak", "no", "0", "false"]):
+        return False
+    return any(x in s for x in ["sudah", "yes", "1", "true", "sertifikat", "punya", "ada"])
+
+def is_s3(pendidikan):
+    p = normalize_text(pendidikan)
+    return any(x in p for x in ["s3", "doktor", "doctor", "phd", "dr."])
+
+def is_s2(pendidikan):
+    p = normalize_text(pendidikan)
+    return any(x in p for x in ["s2", "magister", "master", "m."])
+
+def ensure_pendidikan(df_dosen):
+    """Jika kolom Pendidikan Terakhir tidak ada, isi default wajar dari jabatan."""
+    df = df_dosen.copy()
+    if "Pendidikan Terakhir" not in df.columns:
+        def guess(row):
+            r = jabatan_rank(row.get("Jabatan Akademik", ""))
+            if r >= 3:
+                return "S3"
+            if r == 2:
+                return "S3"  # Lektor sering S3
+            return "S2"
+        df["Pendidikan Terakhir"] = df.apply(guess, axis=1)
+    else:
+        df["Pendidikan Terakhir"] = df["Pendidikan Terakhir"].fillna("").astype(str)
+    return df
 
 def get_eligible(df_dosen):
+    """
+    Eligible jika:
+    1. Status Dosen tetap/aktif
+    2. S3 + minimal Lektor  ATAU  S2 + minimal Lektor Kepala
+    3. Serdos sudah
+    """
+    df = ensure_pendidikan(df_dosen)
+
     def is_eligible(row):
-        if str(row.get("Status Dosen", "")).strip() != "Dosen Tetap":
+        if not is_dosen_tetap(row.get("Status Dosen", "")):
             return False
-        if str(row.get("Status SERDOS", "")).strip() != "Sudah":
+        if not is_serdos_sudah(row.get("Status SERDOS", "")):
             return False
-        jabatan = str(row.get("Jabatan Akademik", "")).lower()
-        pendidikan = str(row.get("Pendidikan Terakhir", "")).upper()
-        if "guru besar" in jabatan or "profesor" in jabatan:
-            jab_rank = 4
-        elif "lektor kepala" in jabatan:
-            jab_rank = 3
-        elif "lektor" in jabatan:
-            jab_rank = 2
-        elif "asisten" in jabatan:
-            jab_rank = 1
-        else:
-            jab_rank = 0
-        if "S3" in pendidikan or "DOKTOR" in pendidikan:
-            return jab_rank >= 2
-        if "S2" in pendidikan or "MAGISTER" in pendidikan:
-            return jab_rank >= 3
+        rank = jabatan_rank(row.get("Jabatan Akademik", ""))
+        pend = row.get("Pendidikan Terakhir", "")
+        if is_s3(pend):
+            return rank >= 2  # minimal Lektor
+        if is_s2(pend):
+            return rank >= 3  # minimal Lektor Kepala
+        # Jika pendidikan kosong tapi Guru Besar / Lektor Kepala → anggap eligible (asumsi S3)
+        if rank >= 3:
+            return True
         return False
-    return df_dosen[df_dosen.apply(is_eligible, axis=1)].copy()
+
+    result = df[df.apply(is_eligible, axis=1)].copy()
+    return result.reset_index(drop=True)
 
 def render_header(title: str, subtitle: str = ""):
     col_logo, col_text = st.columns([1, 6])
@@ -239,7 +312,13 @@ st.sidebar.markdown("---")
 
 menu = st.sidebar.radio(
     "Menu Navigasi",
-    ["🏠 Dashboard", "📋 Daftar Asesor BKD", "⚠️ Kekurangan Asesor BKD", "✅ Eligible Asesor BKD"],
+    [
+        "🏠 Dashboard",
+        "📋 Daftar Asesor BKD",
+        "👨‍🏫 Data Dosen",
+        "⚠️ Kekurangan Asesor BKD",
+        "✅ Eligible Asesor BKD",
+    ],
 )
 
 st.sidebar.markdown("---")
@@ -274,11 +353,8 @@ if uploaded_dosen is not None:
         st.session_state._last_dosen_name = uploaded_dosen.name
 
 df_asesor = st.session_state.df_asesor.copy()
-df_dosen = st.session_state.df_dosen.copy()
-
-if "Pendidikan Terakhir" not in df_dosen.columns:
-    df_dosen["Pendidikan Terakhir"] = np.random.choice(["S2", "S3"], len(df_dosen), p=[0.5, 0.5])
-    st.session_state.df_dosen = df_dosen
+df_dosen = ensure_pendidikan(st.session_state.df_dosen.copy())
+st.session_state.df_dosen = df_dosen
 
 # ==================== DASHBOARD ====================
 if menu == "🏠 Dashboard":
@@ -512,6 +588,93 @@ elif menu == "📋 Daftar Asesor BKD":
         fig.update_layout(xaxis_tickangle=-40)
         st.plotly_chart(fig, use_container_width=True)
 
+# ==================== DATA DOSEN ====================
+elif menu == "👨‍🏫 Data Dosen":
+    render_header("👨‍🏫 Data Dosen Masuk Periode BKD", "Daftar dosen yang masuk periode penilaian BKD")
+
+    st.metric("Total Dosen Periode", len(df_dosen))
+
+    # Filters
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        fak_opts = sorted(df_dosen["Fakultas"].dropna().astype(str).unique()) if "Fakultas" in df_dosen.columns else []
+        f_f = st.multiselect("Filter Fakultas", fak_opts, key="dosen_fak")
+    with d2:
+        pro_opts = sorted(df_dosen["Prodi"].dropna().astype(str).unique()) if "Prodi" in df_dosen.columns else []
+        p_f = st.multiselect("Filter Prodi", pro_opts, key="dosen_pro")
+    with d3:
+        if "Jabatan Akademik" in df_dosen.columns:
+            jab_opts = sorted(df_dosen["Jabatan Akademik"].dropna().astype(str).unique())
+            j_f = st.multiselect("Filter Jabatan", jab_opts, key="dosen_jab")
+        else:
+            j_f = []
+
+    df_dview = df_dosen.copy()
+    if f_f:
+        df_dview = df_dview[df_dview["Fakultas"].astype(str).isin(f_f)]
+    if p_f:
+        df_dview = df_dview[df_dview["Prodi"].astype(str).isin(p_f)]
+    if j_f:
+        df_dview = df_dview[df_dview["Jabatan Akademik"].astype(str).isin(j_f)]
+
+    display_cols = [c for c in [
+        "ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi",
+        "Jabatan Akademik", "Status Dosen", "Status SERDOS", "Pendidikan Terakhir"
+    ] if c in df_dview.columns]
+
+    st.dataframe(df_dview[display_cols], use_container_width=True, hide_index=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    excel_bytes = to_excel_bytes(df_dview[display_cols], "Data Dosen")
+    st.download_button(
+        "⬇️ Export Excel Data Dosen",
+        data=excel_bytes,
+        file_name=f"Data_Dosen_Periode_BKD_{ts}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.markdown("---")
+    st.subheader("Ringkasan Dosen")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        if "Status Dosen" in df_dosen.columns:
+            n_tetap = df_dosen["Status Dosen"].astype(str).str.lower().str.contains("tetap").sum()
+            # kurangi yang "tidak tetap"
+            n_tidak = df_dosen["Status Dosen"].astype(str).str.lower().str.contains("tidak tetap|non tetap").sum()
+            st.metric("Dosen Tetap (approx)", int(n_tetap - n_tidak) if n_tetap >= n_tidak else int(n_tetap))
+        else:
+            st.metric("Dosen", len(df_dosen))
+    with c2:
+        if "Status SERDOS" in df_dosen.columns:
+            n_ser = df_dosen["Status SERDOS"].astype(str).str.lower().str.contains("sudah").sum()
+            st.metric("Sudah SERDOS", int(n_ser))
+        else:
+            st.metric("SERDOS", "-")
+    with c3:
+        if "Jabatan Akademik" in df_dosen.columns:
+            st.metric("Lektor / di atas", int(df_dosen["Jabatan Akademik"].astype(str).str.lower().str.contains("lektor|guru besar|profesor").sum()))
+        else:
+            st.metric("Jabatan", "-")
+    with c4:
+        st.metric("Eligible (estimasi)", len(get_eligible(df_dosen)))
+
+    if "Fakultas" in df_dosen.columns:
+        st.subheader("Distribusi Dosen per Fakultas")
+        fig = px.bar(
+            df_dosen.groupby("Fakultas").size().reset_index(name="Jumlah"),
+            x="Fakultas", y="Jumlah", color="Jumlah",
+            color_continuous_scale=["#a8d5e5", PRIMARY], text="Jumlah",
+        )
+        fig.update_traces(textposition="outside")
+        fig.update_layout(showlegend=False, height=350, plot_bgcolor="white", paper_bgcolor="white")
+        st.plotly_chart(fig, use_container_width=True)
+
+    if "Jabatan Akademik" in df_dosen.columns:
+        st.subheader("Distribusi Jabatan Akademik")
+        fig = px.pie(df_dosen, names="Jabatan Akademik", hole=0.35,
+                     color_discrete_sequence=px.colors.sequential.Blues_r)
+        st.plotly_chart(fig, use_container_width=True)
+
 # ==================== KEKURANGAN ====================
 elif menu == "⚠️ Kekurangan Asesor BKD":
     render_header("⚠️ Kekurangan Asesor BKD", "Ideal: setiap Prodi memiliki Asesor sebanyak 30% dari jumlah Dosen")
@@ -539,14 +702,20 @@ elif menu == "⚠️ Kekurangan Asesor BKD":
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    st.subheader("Perbandingan Jumlah Asesor vs Ideal")
+    st.subheader("Perbandingan Jumlah Asesor vs Ideal (per Fakultas–Prodi)")
+    df_k_plot = df_kekurangan.copy()
+    df_k_plot["Label"] = df_k_plot["Fakultas"].astype(str) + " – " + df_k_plot["Prodi"].astype(str)
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Jumlah Asesor", x=df_kekurangan["Prodi"],
-                         y=df_kekurangan["Jumlah Asesor"], marker_color=PRIMARY))
-    fig.add_trace(go.Scatter(name="Ideal 30%", x=df_kekurangan["Prodi"],
-                             y=df_kekurangan["Ideal (30%)"], mode="lines+markers",
+    fig.add_trace(go.Bar(name="Jumlah Asesor", x=df_k_plot["Label"],
+                         y=df_k_plot["Jumlah Asesor"], marker_color=PRIMARY))
+    fig.add_trace(go.Bar(name="Jumlah Dosen", x=df_k_plot["Label"],
+                         y=df_k_plot["Jumlah Dosen"], marker_color="#90caf9"))
+    fig.add_trace(go.Scatter(name="Ideal 30%", x=df_k_plot["Label"],
+                             y=df_k_plot["Ideal (30%)"], mode="lines+markers",
                              line=dict(color="#f5a623", width=3)))
-    fig.update_layout(height=400, xaxis_tickangle=-40, plot_bgcolor="white", paper_bgcolor="white")
+    fig.update_layout(height=450, xaxis_tickangle=-45, barmode="group",
+                      plot_bgcolor="white", paper_bgcolor="white",
+                      legend=dict(orientation="h", y=1.08))
     st.plotly_chart(fig, use_container_width=True)
 
     kurang = df_kekurangan[df_kekurangan["Kekurangan"] > 0]
@@ -573,9 +742,32 @@ elif menu == "✅ Eligible Asesor BKD":
 
     df_eligible = get_eligible(df_dosen)
 
-    e1, e2 = st.columns(2)
+    e1, e2, e3 = st.columns(3)
     e1.metric("Total Eligible", len(df_eligible))
     e2.metric("% dari Total Dosen", f"{len(df_eligible)/max(len(df_dosen),1)*100:.1f}%")
+    e3.metric("Total Dosen Periode", len(df_dosen))
+
+    # Breakdown kenapa eligible bisa 0 (transparansi filter)
+    with st.expander("ℹ️ Rincian filter kelayakan (diagnosa)"):
+        dtmp = ensure_pendidikan(df_dosen)
+        n_all = len(dtmp)
+        n_tetap = int(dtmp.apply(lambda r: is_dosen_tetap(r.get("Status Dosen", "")), axis=1).sum()) if n_all else 0
+        n_ser = int(dtmp.apply(lambda r: is_serdos_sudah(r.get("Status SERDOS", "")), axis=1).sum()) if n_all else 0
+        n_both = int(dtmp.apply(
+            lambda r: is_dosen_tetap(r.get("Status Dosen", "")) and is_serdos_sudah(r.get("Status SERDOS", "")),
+            axis=1,
+        ).sum()) if n_all else 0
+        st.write(f"- Total dosen: **{n_all}**")
+        st.write(f"- Status Dosen tetap/aktif: **{n_tetap}**")
+        st.write(f"- Status SERDOS sudah: **{n_ser}**")
+        st.write(f"- Tetap + Serdos: **{n_both}**")
+        st.write(f"- Lolos kualifikasi jabatan + pendidikan: **{len(df_eligible)}**")
+        if n_all and "Status Dosen" in dtmp.columns:
+            st.caption("Nilai unik Status Dosen: " + ", ".join(sorted(dtmp["Status Dosen"].astype(str).unique())[:12]))
+        if n_all and "Status SERDOS" in dtmp.columns:
+            st.caption("Nilai unik Status SERDOS: " + ", ".join(sorted(dtmp["Status SERDOS"].astype(str).unique())[:12]))
+        if n_all and "Jabatan Akademik" in dtmp.columns:
+            st.caption("Nilai unik Jabatan: " + ", ".join(sorted(dtmp["Jabatan Akademik"].astype(str).unique())[:12]))
 
     ef1, ef2, ef3 = st.columns(3)
     with ef1:
