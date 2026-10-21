@@ -98,8 +98,18 @@ def to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
 def load_excel(file):
     return pd.read_excel(file)
 
+def normalize_asesor(df):
+    """Pastikan kolom asesor konsisten & aman untuk data_editor."""
+    expected = ["ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi"]
+    df = df.copy()
+    for c in expected:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[expected].fillna("").astype(str)
+    return df.reset_index(drop=True)
+
 def get_sample_asesor():
-    return pd.read_excel(os.path.join(BASE_DIR, "data_asesor.xlsx"))
+    return normalize_asesor(pd.read_excel(os.path.join(BASE_DIR, "data_asesor.xlsx")))
 
 def get_sample_dosen():
     return pd.read_excel(os.path.join(BASE_DIR, "data_dosen.xlsx"))
@@ -175,15 +185,16 @@ uploaded_dosen = st.sidebar.file_uploader("Data Dosen Masuk Periode BKD", type=[
 # ==================== SESSION STATE ====================
 if "df_asesor" not in st.session_state:
     if uploaded_asesor is not None:
-        st.session_state.df_asesor = load_excel(uploaded_asesor)
+        st.session_state.df_asesor = normalize_asesor(load_excel(uploaded_asesor))
     else:
         st.session_state.df_asesor = get_sample_asesor()
         st.sidebar.info("📦 Menggunakan data sample Asesor")
 
 if uploaded_asesor is not None:
     if st.session_state.get("_last_asesor_name") != uploaded_asesor.name:
-        st.session_state.df_asesor = load_excel(uploaded_asesor)
+        st.session_state.df_asesor = normalize_asesor(load_excel(uploaded_asesor))
         st.session_state._last_asesor_name = uploaded_asesor.name
+
 
 if "df_dosen" not in st.session_state:
     if uploaded_dosen is not None:
@@ -310,45 +321,61 @@ elif menu == "📋 Daftar Asesor BKD":
     if p_filter:
         df_view = df_view[df_view["Prodi"].isin(p_filter)]
 
-    st.markdown("### Tabel Data Asesor")
-    st.caption("Edit langsung di tabel. Hapus baris dengan menghapus isinya lalu klik Simpan, atau gunakan Hapus by ID Peg.")
+    # Pastikan kolom stabil & tipe aman untuk data_editor (hindari StreamlitAPIException)
+    expected_cols = ["ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi"]
+    for c in expected_cols:
+        if c not in df_view.columns:
+            df_view[c] = ""
+    df_view = df_view[expected_cols].copy()
+    df_view = df_view.fillna("").astype(str).reset_index(drop=True)
 
-    edited = st.data_editor(
-        df_view,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key="editor_asesor",
-        column_config={
-            "ID Peg": st.column_config.TextColumn("ID Peg", required=True),
-            "NUPTK": st.column_config.TextColumn("NUPTK"),
-            "Nama": st.column_config.TextColumn("Nama", required=True),
-            "Fakultas": st.column_config.TextColumn("Fakultas"),
-            "Prodi": st.column_config.TextColumn("Prodi"),
-        }
-    )
+    st.markdown("### Tabel Data Asesor")
+    st.caption("Edit langsung di tabel. Hapus baris di editor lalu klik Simpan, atau gunakan Hapus by ID Peg.")
+
+    if len(df_view) == 0 and not f_filter and not p_filter:
+        st.warning("Data asesor kosong. Tambahkan data baru di form bawah atau upload Excel.")
+        edited = df_view
+    else:
+        edited = st.data_editor(
+            df_view,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="editor_asesor_v2",
+            column_config={
+                "ID Peg": st.column_config.TextColumn("ID Peg", width="medium"),
+                "NUPTK": st.column_config.TextColumn("NUPTK", width="medium"),
+                "Nama": st.column_config.TextColumn("Nama", width="large"),
+                "Fakultas": st.column_config.TextColumn("Fakultas", width="small"),
+                "Prodi": st.column_config.TextColumn("Prodi", width="medium"),
+            },
+        )
 
     b1, b2, b3 = st.columns([1, 1, 1])
     with b1:
         if st.button("💾 Simpan Perubahan", use_container_width=True):
-            if not f_filter and not p_filter:
-                st.session_state.df_asesor = edited.reset_index(drop=True)
-            else:
-                full = st.session_state.df_asesor.copy()
-                edited_ids = set(edited["ID Peg"].astype(str))
-                view_ids = set(df_view["ID Peg"].astype(str))
-                deleted_ids = view_ids - edited_ids
-                full = full[~full["ID Peg"].astype(str).isin(deleted_ids)]
-                for _, row in edited.iterrows():
-                    mask = full["ID Peg"].astype(str) == str(row["ID Peg"])
-                    if mask.any():
-                        for col in edited.columns:
-                            full.loc[mask, col] = row[col]
-                    else:
-                        full = pd.concat([full, pd.DataFrame([row])], ignore_index=True)
-                st.session_state.df_asesor = full.reset_index(drop=True)
-            st.success("✅ Perubahan berhasil disimpan!")
-            st.rerun()
+            try:
+                edited_clean = normalize_asesor(edited)
+                if not f_filter and not p_filter:
+                    st.session_state.df_asesor = edited_clean
+                else:
+                    full = normalize_asesor(st.session_state.df_asesor)
+                    edited_ids = set(edited_clean["ID Peg"].astype(str))
+                    view_ids = set(df_view["ID Peg"].astype(str))
+                    deleted_ids = view_ids - edited_ids
+                    full = full[~full["ID Peg"].astype(str).isin(deleted_ids)]
+                    for _, row in edited_clean.iterrows():
+                        mask = full["ID Peg"].astype(str) == str(row["ID Peg"])
+                        if mask.any():
+                            for col in edited_clean.columns:
+                                full.loc[mask, col] = row[col]
+                        else:
+                            full = pd.concat([full, pd.DataFrame([row])], ignore_index=True)
+                    st.session_state.df_asesor = normalize_asesor(full)
+                st.success("✅ Perubahan berhasil disimpan!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Gagal menyimpan: {e}")
 
     with b2:
         del_id = st.text_input("ID Peg yang dihapus", placeholder="contoh: A001", label_visibility="collapsed")
@@ -395,14 +422,14 @@ elif menu == "📋 Daftar Asesor BKD":
                 st.error("ID Peg sudah ada.")
             else:
                 new_row = pd.DataFrame([{
-                    "ID Peg": new_id,
-                    "NUPTK": new_nuptk,
-                    "Nama": new_nama,
-                    "Fakultas": new_fak,
-                    "Prodi": new_prodi,
+                    "ID Peg": str(new_id).strip(),
+                    "NUPTK": str(new_nuptk).strip(),
+                    "Nama": str(new_nama).strip(),
+                    "Fakultas": str(new_fak).strip(),
+                    "Prodi": str(new_prodi).strip(),
                 }])
-                st.session_state.df_asesor = pd.concat(
-                    [st.session_state.df_asesor, new_row], ignore_index=True
+                st.session_state.df_asesor = normalize_asesor(
+                    pd.concat([st.session_state.df_asesor, new_row], ignore_index=True)
                 )
                 st.success(f"✅ Asesor {new_nama} berhasil ditambahkan.")
                 st.rerun()
