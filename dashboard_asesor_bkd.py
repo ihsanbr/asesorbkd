@@ -305,7 +305,7 @@ def render_header(title: str, subtitle: str = ""):
             st.markdown(f'<p class="sub-header">{subtitle}</p>', unsafe_allow_html=True)
 
 # ==================== SIDEBAR ====================
-st.sidebar.markdown("### 📊 Asesor BKD UNS")
+st.sidebar.markdown("### Asesor BKD UNS")
 if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, width=120)
 st.sidebar.markdown("---")
@@ -313,11 +313,11 @@ st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Menu Navigasi",
     [
-        "🏠 Dashboard",
-        "📋 Daftar Asesor BKD",
-        "👨‍🏫 Data Dosen",
-        "⚠️ Kekurangan Asesor BKD",
-        "✅ Eligible Asesor BKD",
+        "Dashboard",
+        "Daftar Asesor BKD",
+        "Data Dosen",
+        "Kekurangan Asesor BKD",
+        "Eligible Asesor BKD",
     ],
 )
 
@@ -357,7 +357,7 @@ df_dosen = ensure_pendidikan(st.session_state.df_dosen.copy())
 st.session_state.df_dosen = df_dosen
 
 # ==================== DASHBOARD ====================
-if menu == "🏠 Dashboard":
+if menu == "Dashboard":
     render_header(
         "Dashboard Monitoring Asesor BKD",
         "Universitas Sebelas Maret · Sistem Monitoring Kecukupan & Kelayakan Asesor"
@@ -443,108 +443,167 @@ if menu == "🏠 Dashboard":
     )
 
 # ==================== DAFTAR ASESOR ====================
-elif menu == "📋 Daftar Asesor BKD":
-    render_header("📋 Daftar Asesor BKD", "Kelola data asesor: lihat, edit, hapus, dan export Excel")
+elif menu == "Daftar Asesor BKD":
+    render_header("Daftar Asesor BKD", "Kelola data asesor: edit, pilih, hapus, dan export Excel")
 
     st.metric("Total Asesor", len(st.session_state.df_asesor))
 
-    fc1, fc2 = st.columns(2)
+    fc1, fc2, fc3 = st.columns([2, 2, 1])
     with fc1:
         fakultas_opts = sorted(st.session_state.df_asesor["Fakultas"].dropna().unique())
-        f_filter = st.multiselect("Filter Fakultas", fakultas_opts)
+        f_filter = st.multiselect("Filter Fakultas", fakultas_opts, key="as_fak")
     with fc2:
         prodi_opts = sorted(st.session_state.df_asesor["Prodi"].dropna().unique())
-        p_filter = st.multiselect("Filter Prodi", prodi_opts)
+        p_filter = st.multiselect("Filter Prodi", prodi_opts, key="as_pro")
+    with fc3:
+        page_size = st.selectbox("Baris/halaman", [10, 20, 50, 100], index=1, key="as_ps")
 
-    df_view = st.session_state.df_asesor.copy()
+    df_full = normalize_asesor(st.session_state.df_asesor)
     if f_filter:
-        df_view = df_view[df_view["Fakultas"].isin(f_filter)]
+        df_full = df_full[df_full["Fakultas"].isin(f_filter)]
     if p_filter:
-        df_view = df_view[df_view["Prodi"].isin(p_filter)]
+        df_full = df_full[df_full["Prodi"].isin(p_filter)]
+    df_full = df_full.reset_index(drop=True)
 
-    # Pastikan kolom stabil & tipe aman untuk data_editor (hindari StreamlitAPIException)
-    expected_cols = ["ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi"]
-    for c in expected_cols:
-        if c not in df_view.columns:
-            df_view[c] = ""
-    df_view = df_view[expected_cols].copy()
-    df_view = df_view.fillna("").astype(str).reset_index(drop=True)
+    total_rows = len(df_full)
+    total_pages = max(1, (total_rows + page_size - 1) // page_size)
+
+    pc1, pc2, pc3 = st.columns([1, 2, 1])
+    with pc1:
+        if st.button("← Prev", key="as_prev") and st.session_state.get("as_page", 1) > 1:
+            st.session_state.as_page = st.session_state.get("as_page", 1) - 1
+            st.rerun()
+    with pc2:
+        page = st.number_input(
+            f"Halaman (1–{total_pages})",
+            min_value=1,
+            max_value=total_pages,
+            value=min(st.session_state.get("as_page", 1), total_pages),
+            key="as_page_input",
+        )
+        st.session_state.as_page = int(page)
+    with pc3:
+        if st.button("Next →", key="as_next") and st.session_state.get("as_page", 1) < total_pages:
+            st.session_state.as_page = st.session_state.get("as_page", 1) + 1
+            st.rerun()
+
+    page = int(st.session_state.get("as_page", 1))
+    start_i = (page - 1) * page_size
+    end_i = min(start_i + page_size, total_rows)
+    st.caption(f"Menampilkan baris {start_i + 1 if total_rows else 0}–{end_i} dari {total_rows} data")
+
+    # Tambah kolom Pilih untuk delete
+    df_page = df_full.iloc[start_i:end_i].copy().reset_index(drop=True)
+    df_page.insert(0, "Pilih", False)
 
     st.markdown("### Tabel Data Asesor")
-    st.caption("Edit langsung di tabel. Hapus baris di editor lalu klik Simpan, atau gunakan Hapus by ID Peg.")
+    st.caption("Centang kolom **Pilih** lalu Hapus Terpilih · Edit sel lalu Simpan Perubahan · Pagination di atas.")
 
-    if len(df_view) == 0 and not f_filter and not p_filter:
-        st.warning("Data asesor kosong. Tambahkan data baru di form bawah atau upload Excel.")
-        edited = df_view
-    else:
-        edited = st.data_editor(
-            df_view,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            key="editor_asesor_v2",
-            column_config={
-                "ID Peg": st.column_config.TextColumn("ID Peg", width="medium"),
-                "NUPTK": st.column_config.TextColumn("NUPTK", width="medium"),
-                "Nama": st.column_config.TextColumn("Nama", width="large"),
-                "Fakultas": st.column_config.TextColumn("Fakultas", width="small"),
-                "Prodi": st.column_config.TextColumn("Prodi", width="medium"),
-            },
-        )
+    edited = st.data_editor(
+        df_page,
+        num_rows="fixed",
+        use_container_width=True,
+        hide_index=True,
+        key=f"editor_asesor_p{page}",
+        column_config={
+            "Pilih": st.column_config.CheckboxColumn("Pilih", default=False, width="small"),
+            "ID Peg": st.column_config.TextColumn("ID Peg", width="medium"),
+            "NUPTK": st.column_config.TextColumn("NUPTK", width="medium"),
+            "Nama": st.column_config.TextColumn("Nama", width="large"),
+            "Fakultas": st.column_config.TextColumn("Fakultas", width="medium"),
+            "Prodi": st.column_config.TextColumn("Prodi", width="medium"),
+        },
+        disabled=[],
+    )
 
-    b1, b2, b3 = st.columns([1, 1, 1])
+    b1, b2, b3, b4, b5 = st.columns(5)
     with b1:
-        if st.button("💾 Simpan Perubahan", use_container_width=True):
+        if st.button("Simpan Perubahan", use_container_width=True, key="as_save"):
             try:
-                edited_clean = normalize_asesor(edited)
-                if not f_filter and not p_filter:
-                    st.session_state.df_asesor = edited_clean
-                else:
-                    full = normalize_asesor(st.session_state.df_asesor)
-                    edited_ids = set(edited_clean["ID Peg"].astype(str))
-                    view_ids = set(df_view["ID Peg"].astype(str))
-                    deleted_ids = view_ids - edited_ids
-                    full = full[~full["ID Peg"].astype(str).isin(deleted_ids)]
-                    for _, row in edited_clean.iterrows():
-                        mask = full["ID Peg"].astype(str) == str(row["ID Peg"])
-                        if mask.any():
-                            for col in edited_clean.columns:
-                                full.loc[mask, col] = row[col]
-                        else:
-                            full = pd.concat([full, pd.DataFrame([row])], ignore_index=True)
-                    st.session_state.df_asesor = normalize_asesor(full)
-                st.success("✅ Perubahan berhasil disimpan!")
+                ed = edited.drop(columns=["Pilih"], errors="ignore")
+                ed = normalize_asesor(ed)
+                # Update baris halaman ini ke df_full lalu ke session
+                full = normalize_asesor(st.session_state.df_asesor)
+                # Ganti berdasarkan posisi filter+page: rebuild filtered slice
+                mask_filter = pd.Series([True] * len(full))
+                if f_filter:
+                    mask_filter &= full["Fakultas"].isin(f_filter)
+                if p_filter:
+                    mask_filter &= full["Prodi"].isin(p_filter)
+                idx_filtered = full.index[mask_filter].tolist()
+                page_idx = idx_filtered[start_i:end_i]
+                for i, src_idx in enumerate(page_idx):
+                    if i < len(ed):
+                        for col in ["ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi"]:
+                            full.at[src_idx, col] = ed.iloc[i][col]
+                st.session_state.df_asesor = normalize_asesor(full)
+                st.success("Perubahan halaman ini disimpan.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Gagal menyimpan: {e}")
 
     with b2:
-        del_id = st.text_input("ID Peg yang dihapus", placeholder="contoh: A001", label_visibility="collapsed")
-        if st.button("🗑️ Hapus by ID Peg", use_container_width=True) and del_id:
+        if st.button("Hapus Terpilih", use_container_width=True, key="as_del_sel"):
+            selected_ids = edited.loc[edited["Pilih"] == True, "ID Peg"].astype(str).tolist()
+            if not selected_ids:
+                st.warning("Tidak ada baris yang dipilih.")
+            else:
+                st.session_state.df_asesor = normalize_asesor(
+                    st.session_state.df_asesor[
+                        ~st.session_state.df_asesor["ID Peg"].astype(str).isin(selected_ids)
+                    ]
+                )
+                st.success(f"{len(selected_ids)} data dihapus.")
+                st.rerun()
+
+    with b3:
+        if st.button("Delete All", use_container_width=True, key="as_del_all", type="primary"):
+            st.session_state["_confirm_del_all_asesor"] = True
+
+    with b4:
+        del_id = st.text_input("Hapus by ID Peg", placeholder="ID Peg", label_visibility="collapsed", key="as_del_id")
+        if st.button("Hapus by ID", use_container_width=True, key="as_del_id_btn") and del_id:
             before = len(st.session_state.df_asesor)
-            st.session_state.df_asesor = st.session_state.df_asesor[
-                st.session_state.df_asesor["ID Peg"].astype(str) != str(del_id).strip()
-            ].reset_index(drop=True)
-            after = len(st.session_state.df_asesor)
-            if before > after:
-                st.success(f"✅ ID Peg {del_id} berhasil dihapus.")
+            st.session_state.df_asesor = normalize_asesor(
+                st.session_state.df_asesor[
+                    st.session_state.df_asesor["ID Peg"].astype(str) != str(del_id).strip()
+                ]
+            )
+            if len(st.session_state.df_asesor) < before:
+                st.success(f"ID Peg {del_id} dihapus.")
                 st.rerun()
             else:
                 st.error("ID Peg tidak ditemukan.")
 
-    with b3:
+    with b5:
         ts = datetime.now().strftime("%Y%m%d_%H%M")
-        excel_bytes = to_excel_bytes(st.session_state.df_asesor, "Daftar Asesor")
+        excel_bytes = to_excel_bytes(normalize_asesor(st.session_state.df_asesor), "Daftar Asesor")
         st.download_button(
-            "⬇️ Export Excel",
+            "Export Excel",
             data=excel_bytes,
             file_name=f"Daftar_Asesor_BKD_{ts}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            use_container_width=True,
         )
 
+    if st.session_state.get("_confirm_del_all_asesor"):
+        st.warning("Yakin hapus **SEMUA** data Asesor?")
+        c_yes, c_no = st.columns(2)
+        with c_yes:
+            if st.button("Ya, hapus semua Asesor", key="as_del_all_yes"):
+                st.session_state.df_asesor = normalize_asesor(
+                    pd.DataFrame(columns=["ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi"])
+                )
+                st.session_state._confirm_del_all_asesor = False
+                st.success("Semua data Asesor dihapus.")
+                st.rerun()
+        with c_no:
+            if st.button("Batal", key="as_del_all_no"):
+                st.session_state._confirm_del_all_asesor = False
+                st.rerun()
+
     st.markdown("---")
-    st.subheader("➕ Tambah Asesor Baru")
+    st.subheader("Tambah Asesor Baru")
     with st.form("form_tambah_asesor", clear_on_submit=True):
         tc1, tc2, tc3 = st.columns(3)
         with tc1:
@@ -572,112 +631,201 @@ elif menu == "📋 Daftar Asesor BKD":
                 st.session_state.df_asesor = normalize_asesor(
                     pd.concat([st.session_state.df_asesor, new_row], ignore_index=True)
                 )
-                st.success(f"✅ Asesor {new_nama} berhasil ditambahkan.")
+                st.success(f"Asesor {new_nama} ditambahkan.")
                 st.rerun()
 
-    st.markdown("---")
-    st.subheader("Visualisasi")
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        fig = px.pie(st.session_state.df_asesor, names="Fakultas", title="Proporsi per Fakultas",
-                     hole=0.35, color_discrete_sequence=px.colors.sequential.Blues_r)
-        st.plotly_chart(fig, use_container_width=True)
-    with cc2:
-        fig = px.histogram(st.session_state.df_asesor, x="Prodi", title="Jumlah per Prodi",
-                           color_discrete_sequence=[PRIMARY])
-        fig.update_layout(xaxis_tickangle=-40)
-        st.plotly_chart(fig, use_container_width=True)
-
 # ==================== DATA DOSEN ====================
-elif menu == "👨‍🏫 Data Dosen":
-    render_header("👨‍🏫 Data Dosen Masuk Periode BKD", "Daftar dosen yang masuk periode penilaian BKD")
+elif menu == "Data Dosen":
+    render_header("Data Dosen Masuk Periode BKD", "Daftar dosen yang masuk periode penilaian BKD — edit, pilih, hapus, pagination")
 
-    st.metric("Total Dosen Periode", len(df_dosen))
+    # Pastikan session dosen editable
+    if "df_dosen" not in st.session_state:
+        st.session_state.df_dosen = df_dosen.copy()
 
-    # Filters
-    d1, d2, d3 = st.columns(3)
+    st.metric("Total Dosen Periode", len(st.session_state.df_dosen))
+
+    d1, d2, d3, d4 = st.columns([2, 2, 2, 1])
     with d1:
-        fak_opts = sorted(df_dosen["Fakultas"].dropna().astype(str).unique()) if "Fakultas" in df_dosen.columns else []
+        fak_opts = sorted(st.session_state.df_dosen["Fakultas"].dropna().astype(str).unique()) if "Fakultas" in st.session_state.df_dosen.columns else []
         f_f = st.multiselect("Filter Fakultas", fak_opts, key="dosen_fak")
     with d2:
-        pro_opts = sorted(df_dosen["Prodi"].dropna().astype(str).unique()) if "Prodi" in df_dosen.columns else []
+        pro_opts = sorted(st.session_state.df_dosen["Prodi"].dropna().astype(str).unique()) if "Prodi" in st.session_state.df_dosen.columns else []
         p_f = st.multiselect("Filter Prodi", pro_opts, key="dosen_pro")
     with d3:
-        if "Jabatan Akademik" in df_dosen.columns:
-            jab_opts = sorted(df_dosen["Jabatan Akademik"].dropna().astype(str).unique())
+        if "Jabatan Akademik" in st.session_state.df_dosen.columns:
+            jab_opts = sorted(st.session_state.df_dosen["Jabatan Akademik"].dropna().astype(str).unique())
             j_f = st.multiselect("Filter Jabatan", jab_opts, key="dosen_jab")
         else:
             j_f = []
+    with d4:
+        page_size = st.selectbox("Baris/halaman", [10, 20, 50, 100], index=1, key="dosen_ps")
 
-    df_dview = df_dosen.copy()
+    df_full = ensure_pendidikan(st.session_state.df_dosen.copy())
+    # normalisasi string kolom kunci
+    for c in df_full.columns:
+        if df_full[c].dtype == object:
+            df_full[c] = df_full[c].fillna("").astype(str)
+
     if f_f:
-        df_dview = df_dview[df_dview["Fakultas"].astype(str).isin(f_f)]
+        df_full = df_full[df_full["Fakultas"].isin(f_f)]
     if p_f:
-        df_dview = df_dview[df_dview["Prodi"].astype(str).isin(p_f)]
-    if j_f:
-        df_dview = df_dview[df_dview["Jabatan Akademik"].astype(str).isin(j_f)]
+        df_full = df_full[df_full["Prodi"].isin(p_f)]
+    if j_f and "Jabatan Akademik" in df_full.columns:
+        df_full = df_full[df_full["Jabatan Akademik"].isin(j_f)]
+    df_full = df_full.reset_index(drop=True)
 
     display_cols = [c for c in [
         "ID Peg", "NUPTK", "Nama", "Fakultas", "Prodi",
         "Jabatan Akademik", "Status Dosen", "Status SERDOS", "Pendidikan Terakhir"
-    ] if c in df_dview.columns]
+    ] if c in df_full.columns]
 
-    st.dataframe(df_dview[display_cols], use_container_width=True, hide_index=True)
+    total_rows = len(df_full)
+    total_pages = max(1, (total_rows + page_size - 1) // page_size)
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
-    excel_bytes = to_excel_bytes(df_dview[display_cols], "Data Dosen")
-    st.download_button(
-        "⬇️ Export Excel Data Dosen",
-        data=excel_bytes,
-        file_name=f"Data_Dosen_Periode_BKD_{ts}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pc1, pc2, pc3 = st.columns([1, 2, 1])
+    with pc1:
+        if st.button("← Prev", key="dosen_prev") and st.session_state.get("dosen_page", 1) > 1:
+            st.session_state.dosen_page = st.session_state.get("dosen_page", 1) - 1
+            st.rerun()
+    with pc2:
+        page = st.number_input(
+            f"Halaman (1–{total_pages})",
+            min_value=1,
+            max_value=total_pages,
+            value=min(st.session_state.get("dosen_page", 1), total_pages),
+            key="dosen_page_input",
+        )
+        st.session_state.dosen_page = int(page)
+    with pc3:
+        if st.button("Next →", key="dosen_next") and st.session_state.get("dosen_page", 1) < total_pages:
+            st.session_state.dosen_page = st.session_state.get("dosen_page", 1) + 1
+            st.rerun()
+
+    page = int(st.session_state.get("dosen_page", 1))
+    start_i = (page - 1) * page_size
+    end_i = min(start_i + page_size, total_rows)
+    st.caption(f"Menampilkan baris {start_i + 1 if total_rows else 0}–{end_i} dari {total_rows} data")
+
+    df_page = df_full[display_cols].iloc[start_i:end_i].copy().reset_index(drop=True)
+    df_page.insert(0, "Pilih", False)
+
+    st.markdown("### Tabel Data Dosen")
+    st.caption("Centang **Pilih** lalu Hapus Terpilih · Edit sel lalu Simpan · Pagination di atas.")
+
+    col_cfg = {
+        "Pilih": st.column_config.CheckboxColumn("Pilih", default=False, width="small"),
+    }
+    for c in display_cols:
+        col_cfg[c] = st.column_config.TextColumn(c)
+
+    edited = st.data_editor(
+        df_page,
+        num_rows="fixed",
+        use_container_width=True,
+        hide_index=True,
+        key=f"editor_dosen_p{page}",
+        column_config=col_cfg,
     )
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        if st.button("Simpan Perubahan", use_container_width=True, key="dosen_save"):
+            try:
+                ed = edited.drop(columns=["Pilih"], errors="ignore")
+                full = ensure_pendidikan(st.session_state.df_dosen.copy())
+                for c in full.columns:
+                    if full[c].dtype == object:
+                        full[c] = full[c].fillna("").astype(str)
+                mask = pd.Series([True] * len(full))
+                if f_f:
+                    mask &= full["Fakultas"].isin(f_f)
+                if p_f:
+                    mask &= full["Prodi"].isin(p_f)
+                if j_f and "Jabatan Akademik" in full.columns:
+                    mask &= full["Jabatan Akademik"].isin(j_f)
+                idx_filtered = full.index[mask].tolist()
+                page_idx = idx_filtered[start_i:end_i]
+                for i, src_idx in enumerate(page_idx):
+                    if i < len(ed):
+                        for col in display_cols:
+                            if col in full.columns and col in ed.columns:
+                                full.at[src_idx, col] = ed.iloc[i][col]
+                st.session_state.df_dosen = full.reset_index(drop=True)
+                st.success("Perubahan halaman ini disimpan.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Gagal menyimpan: {e}")
+
+    with b2:
+        if st.button("Hapus Terpilih", use_container_width=True, key="dosen_del_sel"):
+            selected_ids = edited.loc[edited["Pilih"] == True, "ID Peg"].astype(str).tolist() if "ID Peg" in edited.columns else []
+            if not selected_ids:
+                st.warning("Tidak ada baris yang dipilih.")
+            else:
+                st.session_state.df_dosen = st.session_state.df_dosen[
+                    ~st.session_state.df_dosen["ID Peg"].astype(str).isin(selected_ids)
+                ].reset_index(drop=True)
+                st.success(f"{len(selected_ids)} data dihapus.")
+                st.rerun()
+
+    with b3:
+        if st.button("Delete All", use_container_width=True, key="dosen_del_all", type="primary"):
+            st.session_state["_confirm_del_all_dosen"] = True
+
+    with b4:
+        ts = datetime.now().strftime("%Y%m%d_%H%M")
+        export_df = ensure_pendidikan(st.session_state.df_dosen)
+        cols = [c for c in display_cols if c in export_df.columns]
+        excel_bytes = to_excel_bytes(export_df[cols] if cols else export_df, "Data Dosen")
+        st.download_button(
+            "Export Excel",
+            data=excel_bytes,
+            file_name=f"Data_Dosen_Periode_BKD_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    if st.session_state.get("_confirm_del_all_dosen"):
+        st.warning("Yakin hapus **SEMUA** data Dosen?")
+        c_yes, c_no = st.columns(2)
+        with c_yes:
+            if st.button("Ya, hapus semua Dosen", key="dosen_del_all_yes"):
+                cols = list(st.session_state.df_dosen.columns)
+                st.session_state.df_dosen = pd.DataFrame(columns=cols)
+                st.session_state._confirm_del_all_dosen = False
+                st.success("Semua data Dosen dihapus.")
+                st.rerun()
+        with c_no:
+            if st.button("Batal", key="dosen_del_all_no"):
+                st.session_state._confirm_del_all_dosen = False
+                st.rerun()
 
     st.markdown("---")
     st.subheader("Ringkasan Dosen")
     c1, c2, c3, c4 = st.columns(4)
+    dd = st.session_state.df_dosen
     with c1:
-        if "Status Dosen" in df_dosen.columns:
-            n_tetap = df_dosen["Status Dosen"].astype(str).str.lower().str.contains("tetap").sum()
-            # kurangi yang "tidak tetap"
-            n_tidak = df_dosen["Status Dosen"].astype(str).str.lower().str.contains("tidak tetap|non tetap").sum()
-            st.metric("Dosen Tetap (approx)", int(n_tetap - n_tidak) if n_tetap >= n_tidak else int(n_tetap))
-        else:
-            st.metric("Dosen", len(df_dosen))
+        st.metric("Total Dosen", len(dd))
     with c2:
-        if "Status SERDOS" in df_dosen.columns:
-            n_ser = df_dosen["Status SERDOS"].astype(str).str.lower().str.contains("sudah").sum()
-            st.metric("Sudah SERDOS", int(n_ser))
+        if "Status SERDOS" in dd.columns:
+            n_ser = int(dd["Status SERDOS"].astype(str).str.lower().str.contains("sudah").sum())
+            st.metric("Sudah SERDOS", n_ser)
         else:
             st.metric("SERDOS", "-")
     with c3:
-        if "Jabatan Akademik" in df_dosen.columns:
-            st.metric("Lektor / di atas", int(df_dosen["Jabatan Akademik"].astype(str).str.lower().str.contains("lektor|guru besar|profesor").sum()))
+        if "Jabatan Akademik" in dd.columns:
+            st.metric(
+                "Lektor / di atas",
+                int(dd["Jabatan Akademik"].astype(str).str.lower().str.contains("lektor|guru besar|profesor").sum()),
+            )
         else:
             st.metric("Jabatan", "-")
     with c4:
-        st.metric("Eligible (estimasi)", len(get_eligible(df_dosen)))
-
-    if "Fakultas" in df_dosen.columns:
-        st.subheader("Distribusi Dosen per Fakultas")
-        fig = px.bar(
-            df_dosen.groupby("Fakultas").size().reset_index(name="Jumlah"),
-            x="Fakultas", y="Jumlah", color="Jumlah",
-            color_continuous_scale=["#a8d5e5", PRIMARY], text="Jumlah",
-        )
-        fig.update_traces(textposition="outside")
-        fig.update_layout(showlegend=False, height=350, plot_bgcolor="white", paper_bgcolor="white")
-        st.plotly_chart(fig, use_container_width=True)
-
-    if "Jabatan Akademik" in df_dosen.columns:
-        st.subheader("Distribusi Jabatan Akademik")
-        fig = px.pie(df_dosen, names="Jabatan Akademik", hole=0.35,
-                     color_discrete_sequence=px.colors.sequential.Blues_r)
-        st.plotly_chart(fig, use_container_width=True)
+        st.metric("Eligible (estimasi)", len(get_eligible(dd)))
 
 # ==================== KEKURANGAN ====================
-elif menu == "⚠️ Kekurangan Asesor BKD":
-    render_header("⚠️ Kekurangan Asesor BKD", "Ideal: setiap Prodi memiliki Asesor sebanyak 30% dari jumlah Dosen")
+elif menu == "Kekurangan Asesor BKD":
+    render_header("Kekurangan Asesor BKD", "Ideal: setiap Prodi memiliki Asesor sebanyak 30% dari jumlah Dosen")
 
     st.info("💡 Idealnya, setiap Prodi memiliki Asesor sebanyak **30%** dari jumlah Dosen pada Prodi tersebut.")
 
@@ -730,8 +878,8 @@ elif menu == "⚠️ Kekurangan Asesor BKD":
                 st.progress(min(float(row["Persentase Asesor"]) / 30.0, 1.0))
 
 # ==================== ELIGIBLE ====================
-elif menu == "✅ Eligible Asesor BKD":
-    render_header("✅ Eligible Asesor BKD", "Dosen yang memenuhi syarat menjadi Asesor BKD")
+elif menu == "Eligible Asesor BKD":
+    render_header("Eligible Asesor BKD", "Dosen yang memenuhi syarat menjadi Asesor BKD")
 
     st.markdown("""
     **Kriteria Eligible Asesor BKD:**
