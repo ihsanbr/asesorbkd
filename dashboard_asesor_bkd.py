@@ -53,18 +53,83 @@ st.markdown(f"""
     div[data-testid="stMetric"] [data-testid="stMetricDelta"] {{
         color: #c8f0ff !important;
     }}
+
+    /* ===== SIDEBAR ===== */
     section[data-testid="stSidebar"] {{
         background: linear-gradient(180deg, {SIDEBAR_BG} 0%, {PRIMARY_DARK} 100%) !important;
     }}
-    section[data-testid="stSidebar"] * {{
-        color: white !important;
+    /* Teks navigasi & judul sidebar: putih */
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stRadio label,
+    section[data-testid="stSidebar"] .stCaption,
+    section[data-testid="stSidebar"] small {{
+        color: #ffffff !important;
     }}
-    section[data-testid="stSidebar"] .stRadio label {{
-        color: white !important;
+    section[data-testid="stSidebar"] hr {{
+        border-color: rgba(255,255,255,0.25) !important;
     }}
-    section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p {{
-        color: rgba(255,255,255,0.85) !important;
+
+    /* Label file uploader: putih tebal agar terbaca di sidebar gelap */
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] label,
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] label span,
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] p {{
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
     }}
+
+    /* Kotak dropzone upload: putih + teks gelap + border biru */
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] section,
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] section > div,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {{
+        background-color: #ffffff !important;
+        border: 2px dashed {PRIMARY} !important;
+        border-radius: 10px !important;
+        color: {PRIMARY_DARK} !important;
+    }}
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] section *,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] *,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] span,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] small,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] svg {{
+        color: {PRIMARY_DARK} !important;
+        fill: {PRIMARY_DARK} !important;
+    }}
+    /* Tombol Browse di dalam dropzone */
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] button {{
+        background-color: {PRIMARY} !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }}
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] button:hover {{
+        background-color: {PRIMARY_DARK} !important;
+        color: #ffffff !important;
+    }}
+    /* Nama file yang sudah di-upload */
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stFileUploaderFileName"],
+    section[data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stFileUploaderFileData"] {{
+        color: #ffffff !important;
+    }}
+
+    /* Info / caption di sidebar */
+    section[data-testid="stSidebar"] [data-testid="stAlert"] {{
+        background-color: rgba(255,255,255,0.12) !important;
+        color: #ffffff !important;
+    }}
+    section[data-testid="stSidebar"] [data-testid="stAlert"] * {{
+        color: #ffffff !important;
+    }}
+
+    /* Tombol utama di area konten */
     .stDownloadButton > button, .stButton > button {{
         background-color: {PRIMARY} !important;
         color: white !important;
